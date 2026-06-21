@@ -77,8 +77,11 @@ const DEFAULT_TEMPLATES = {
   </script>
   {{/if}}
   <link rel="stylesheet" href="{{ basePath }}assets/styles.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css" />
+  <link rel="stylesheet" id="hljs-dark" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" disabled />
   {{#if searchEnabled}}
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flexsearch@0.7.43/dist/flexsearch.bundle.min.js" />
+  <script src="https://cdn.jsdelivr.net/npm/flexsearch@0.7.43/dist/flexsearch.bundle.min.js"></script>
   {{/if}}
 </head>
 <body>
@@ -113,6 +116,9 @@ const DEFAULT_TEMPLATES = {
     </div>
   </div>
   <script src="{{ basePath }}assets/app.js"></script>
+  {{#if searchEnabled}}
+  <script src="{{ basePath }}search-index.js"></script>
+  {{/if}}
 </body>
 </html>
 `
