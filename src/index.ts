@@ -10,5 +10,6 @@ export { NavigationGenerator } from './core/navigation';
 export { BuildCacheManager } from './core/build-cache';
 export { SearchIndexer, SeoGenerator } from './core/search-seo';
 export { segmentChinese, simpleSegment, highlightText, highlightKeywords } from './core/segmenter';
+export { PluginManager, registerBuiltinPlugin } from './core/plugin-manager';
 
 export * from './types';

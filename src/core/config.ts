@@ -1,7 +1,7 @@
 import * as fs from 'fs-extra';
 import * as yaml from 'js-yaml';
 import * as path from 'path';
-import { LocaleConfig, SiteConfig } from '../types';
+import { LocaleConfig, SiteConfig, PluginConfig } from '../types';
 
 export const DEFAULT_CONFIG: SiteConfig = {
   title: 'My Documentation',
@@ -86,5 +86,13 @@ favicon: ''
 #   - code: en
 #     name: English
 #     dir: docs/en
+
+# 插件配置（可选）
+# plugins:
+#   - name: reading-time
+#     options:
+#       wordsPerMinute: 200
+#   - name: ./my-local-plugin.js
+#     options: {}
 `;
 }

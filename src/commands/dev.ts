@@ -5,6 +5,8 @@ import * as pc from 'picocolors';
 import * as chokidar from 'chokidar';
 import { WebSocketServer, WebSocket } from 'ws';
 import { build } from './build';
+import { loadConfig } from '../core/config';
+import { PluginManager } from '../core/plugin-manager';
 
 interface DevOptions {
   port?: number;
@@ -165,6 +167,12 @@ export async function dev(cwd: string, options: DevOptions = {}): Promise<void> 
   });
 
   server.listen(port, host);
+
+  const config = loadConfig(cwd);
+  const pluginManager = new PluginManager(cwd, config);
+  pluginManager.loadPlugins().then(() => {
+    pluginManager.applyDevServerStart(server);
+  });
 
   process.on('SIGINT', async () => {
     console.log('');

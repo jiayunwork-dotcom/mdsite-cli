@@ -35,6 +35,7 @@ export class TemplateEngine {
     gtag('config', '{{ site.googleAnalyticsId }}');
   </script>
   {{/if}}
+  {{{ pluginHeadTags }}}
   <link rel="stylesheet" href="{{ basePath }}assets/styles.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css" />
@@ -85,6 +86,7 @@ export class TemplateEngine {
       </aside>
       <main class="content">
         <article class="doc-content">
+          {{#if readingTime}}<div class="reading-time">{{ readingTime }}</div>{{/if}}
           {{{ content }}}
         </article>
       </main>

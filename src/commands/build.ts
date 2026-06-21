@@ -7,7 +7,11 @@ import { MarkdownParser } from '../core/markdown-parser';
 import { NavigationGenerator } from '../core/navigation';
 import { BuildCacheManager } from '../core/build-cache';
 import { SearchIndexer, SeoGenerator } from '../core/search-seo';
-import { BuildStats, LocaleConfig, NavItem, PageMeta, SiteConfig } from '../types';
+import { PluginManager } from '../core/plugin-manager';
+import { BuildStats, LocaleConfig, NavItem, PageMeta, SiteConfig, PageInfo, MarkdownParsedData, BeforeRenderData, AfterRenderData } from '../types';
+import '../plugins/reading-time';
+import '../plugins/copy-code';
+import '../plugins/auto-toc';
 
 interface BuildOptions {
   clean?: boolean;
@@ -22,7 +26,19 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
     fs.removeSync(path.join(cwd, 'dist'));
   }
 
-  const config = loadConfig(cwd);
+  let config = loadConfig(cwd);
+  const pluginManager = new PluginManager(cwd, config);
+
+  await pluginManager.loadPlugins();
+
+  if (pluginManager.hasPlugins()) {
+    console.log(pc.cyan(`🔌 已加载 ${pluginManager.getPluginNames().length} 个插件`));
+  }
+
+  config = pluginManager.applyConfigLoaded(config);
+
+  await pluginManager.applyBeforeBuild();
+
   const templateEngine = new TemplateEngine(cwd);
   const markdownParser = new MarkdownParser(cwd);
   const cacheManager = new BuildCacheManager(cwd);
@@ -59,7 +75,7 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
 
     for (const locale of locales) {
       console.log(pc.dim(`  处理语言: ${locale.name} (${locale.code})`));
-      
+
       const localeDocsDir = path.isAbsolute(locale.dir) ? locale.dir : path.join(cwd, locale.dir);
       if (!fs.existsSync(localeDocsDir)) {
         console.warn(pc.yellow(`    ⚠ 语言目录不存在: ${locale.dir}, 跳过`));
@@ -90,7 +106,7 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
       } else {
         const directlyStale = cacheManager.getStaleFiles(fileHashes);
         staleFiles = new Set(directlyStale);
-        
+
         for (const file of directlyStale) {
           const dependents = cacheManager.findFilesDependingOn(file);
           for (const dep of dependents) {
@@ -102,15 +118,13 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
       for (const file of markdownFiles) {
         const relativePath = path.relative(cwd, file);
         const docsRelPath = path.relative(localeDocsDir, file);
-        
-        let pageData: { meta: PageMeta; plainText: string; includes: string[]; relPath: string } | null = null;
-        
+
         try {
           const rawContent = fs.readFileSync(file, 'utf-8');
           const { content: resolvedContent, includes } = markdownParser.parseIncludes(rawContent, file);
           const metaBase = markdownParser.getPageMeta(resolvedContent, docsRelPath, config.basePath);
           const plainText = markdownParser.extractPlainText(resolvedContent);
-          
+
           const urlPrefix = '/' + locale.code;
           const fullPath = urlPrefix + (metaBase.path.startsWith('/') ? metaBase.path : '/' + metaBase.path);
           const basePath = config.basePath.endsWith('/') ? config.basePath : config.basePath + '/';
@@ -120,13 +134,9 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
             path: fullPath,
             url: fullUrl
           };
-          
-          const relPath = docsRelPath.replace(/\.md$/, '').replace(/\/index$/, '/').replace(/^index$/, '/');
-          
-          pageData = { meta, plainText, includes, relPath };
-          
-          seoGenerator.addUrl(meta.url, relPath);
-          
+
+          seoGenerator.addUrl(meta.url);
+
           if (config.search) {
             searchIndexer.addDocument({
               id: relativePath,
@@ -135,8 +145,19 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
               path: meta.url
             });
           }
+
+          let htmlRelPath: string;
+          if (docsRelPath.endsWith('/index.md')) {
+            htmlRelPath = docsRelPath.replace(/\.md$/, '.html');
+          } else if (docsRelPath === 'index.md') {
+            htmlRelPath = 'index.html';
+          } else {
+            htmlRelPath = docsRelPath.replace(/\.md$/, '.html');
+          }
+
+          pluginManager.addPage({ filePath: file, relativePath, meta, htmlPath: htmlRelPath });
         } catch (e) {}
-        
+
         if (!staleFiles.has(relativePath) && !localeGlobalChanged) {
           skipped.push(relativePath);
           continue;
@@ -145,7 +166,8 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
         try {
           const page = processMarkdownFileLocale(
             file, relativePath, cwd, config, markdownParser,
-            templateEngine, navGenerator, navItems, locale, locales, localeDocsDir
+            templateEngine, navGenerator, navItems, locale, locales, localeDocsDir,
+            pluginManager
           );
 
           const htmlRelPath = path.posix.join(locale.code, page.htmlPath);
@@ -201,7 +223,7 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
     } else {
       const directlyStale = cacheManager.getStaleFiles(fileHashes);
       staleFiles = new Set(directlyStale);
-      
+
       for (const file of directlyStale) {
         const dependents = cacheManager.findFilesDependingOn(file);
         for (const dep of dependents) {
@@ -213,18 +235,15 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
     for (const file of markdownFiles) {
       const relativePath = path.relative(cwd, file);
       const docsRelPath = path.relative(docsDir, file);
-      
-      let pageData: { meta: PageMeta; plainText: string; includes: string[] } | null = null;
-      
+
       try {
         const rawContent = fs.readFileSync(file, 'utf-8');
         const { content: resolvedContent, includes } = markdownParser.parseIncludes(rawContent, file);
         const meta = markdownParser.getPageMeta(resolvedContent, docsRelPath, config.basePath);
         const plainText = markdownParser.extractPlainText(resolvedContent);
-        pageData = { meta, plainText, includes };
-        
+
         seoGenerator.addUrl(meta.url);
-        
+
         if (config.search) {
           searchIndexer.addDocument({
             id: relativePath,
@@ -233,8 +252,19 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
             path: meta.url
           });
         }
+
+        let htmlRelPath: string;
+        if (docsRelPath.endsWith('/index.md')) {
+          htmlRelPath = docsRelPath.replace(/\.md$/, '.html');
+        } else if (docsRelPath === 'index.md') {
+          htmlRelPath = 'index.html';
+        } else {
+          htmlRelPath = docsRelPath.replace(/\.md$/, '.html');
+        }
+
+        pluginManager.addPage({ filePath: file, relativePath, meta, htmlPath: htmlRelPath });
       } catch (e) {}
-      
+
       if (!staleFiles.has(relativePath) && !localeGlobalChanged) {
         skipped.push(relativePath);
         continue;
@@ -243,7 +273,7 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
       try {
         const page = processMarkdownFile(
           file, relativePath, cwd, config, markdownParser,
-          templateEngine, navGenerator, navItems
+          templateEngine, navGenerator, navItems, pluginManager
         );
 
         const htmlRelPath = page.htmlPath;
@@ -278,10 +308,26 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
   copyPublicAssets(cwd, publicDir, distDir);
   copyCoreAssets(cwd, distDir, config);
 
+  const extraAssets = pluginManager.getExtraAssets();
+  for (const asset of extraAssets) {
+    const assetFullPath = path.join(distDir, asset.path);
+    fs.mkdirpSync(path.dirname(assetFullPath));
+    fs.writeFileSync(assetFullPath, asset.content);
+  }
+
   cacheManager.setTemplateHash(currentTemplateHash);
   cacheManager.save();
 
-  const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+  const elapsedTime = Date.now() - startTime;
+
+  pluginManager.applyBuildComplete({
+    totalFiles,
+    rebuiltFiles: rebuilt.length,
+    skippedFiles: skipped.length,
+    elapsedTime
+  });
+
+  const elapsed = ((elapsedTime) / 1000).toFixed(2);
 
   console.log('');
   console.log(pc.bold(pc.green('✅ 构建完成！')));
@@ -290,7 +336,7 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
   console.log(`  重新构建: ${pc.green(String(rebuilt.length))}`);
   console.log(`  跳过:     ${pc.gray(String(skipped.length))}`);
   console.log(`  耗时:     ${pc.yellow(elapsed + 's')}`);
-  
+
   if (rebuilt.length > 0) {
     console.log('');
     console.log(pc.dim('  重新构建的文件:'));
@@ -307,7 +353,7 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
     rebuilt: rebuilt.length,
     skipped: skipped.length,
     total: totalFiles,
-    time: Date.now() - startTime,
+    time: elapsedTime,
     files: { rebuilt, skipped }
   };
 }
@@ -317,11 +363,11 @@ function scanMarkdownFiles(dir: string): string[] {
 
   function walk(current: string) {
     const entries = fs.readdirSync(current, { withFileTypes: true });
-    
+
     for (const entry of entries) {
       if (entry.name.startsWith('_') || entry.name.startsWith('.')) continue;
       if (entry.isDirectory() && entry.name === 'includes') continue;
-      
+
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
         walk(fullPath);
@@ -343,7 +389,8 @@ function processMarkdownFile(
   markdownParser: MarkdownParser,
   templateEngine: TemplateEngine,
   navGenerator: NavigationGenerator,
-  navItems: NavItem[]
+  navItems: NavItem[],
+  pluginManager: PluginManager
 ) {
   const rawContent = fs.readFileSync(filePath, 'utf-8');
   const docsRelPath = path.relative(path.join(cwd, 'docs'), filePath);
@@ -351,15 +398,38 @@ function processMarkdownFile(
   const { content: resolvedContent, includes } = markdownParser.parseIncludes(rawContent, filePath);
 
   const meta = markdownParser.getPageMeta(resolvedContent, docsRelPath, config.basePath);
-  const htmlContent = markdownParser.render(resolvedContent);
+  let htmlContent = markdownParser.render(resolvedContent);
   const plainText = markdownParser.extractPlainText(resolvedContent);
+
+  const pageInfo: PageInfo = { filePath, relativePath, meta, htmlPath: '' };
+
+  let htmlRelPath: string;
+  if (docsRelPath.endsWith('/index.md')) {
+    htmlRelPath = docsRelPath.replace(/\.md$/, '.html');
+  } else if (docsRelPath === 'index.md') {
+    htmlRelPath = 'index.html';
+  } else {
+    htmlRelPath = docsRelPath.replace(/\.md$/, '.html');
+  }
+  pageInfo.htmlPath = htmlRelPath;
+
+  const parsedData: MarkdownParsedData = {
+    filePath,
+    rawContent,
+    html: htmlContent,
+    meta
+  };
+  const parsedResult = pluginManager.applyMarkdownParsed(parsedData);
+  htmlContent = parsedResult.html;
 
   const currentPath = meta.path;
   const navHtml = navGenerator.renderNavHtml(navItems, currentPath, config.basePath);
 
   const basePath = config.basePath.endsWith('/') ? config.basePath : config.basePath + '/';
 
-  const templateData = {
+  const headTags = pluginManager.getHeadTags().join('\n  ');
+
+  let templateData: Record<string, any> = {
     site: config,
     page: meta,
     nav: navHtml,
@@ -374,19 +444,23 @@ function processMarkdownFile(
     pageLang: 'zh-CN',
     logoHref: basePath,
     hasLocales: false,
-    searchIndexPath: basePath + 'search-index.js'
+    searchIndexPath: basePath + 'search-index.js',
+    pluginHeadTags: headTags
   };
 
-  const html = templateEngine.render('layout.html', templateData);
+  const beforeRenderResult = pluginManager.applyBeforeRender({
+    templateData,
+    page: pageInfo
+  });
+  templateData = beforeRenderResult.templateData;
 
-  let htmlRelPath: string;
-  if (docsRelPath.endsWith('/index.md')) {
-    htmlRelPath = docsRelPath.replace(/\.md$/, '.html');
-  } else if (docsRelPath === 'index.md') {
-    htmlRelPath = 'index.html';
-  } else {
-    htmlRelPath = docsRelPath.replace(/\.md$/, '.html');
-  }
+  let html = templateEngine.render('layout.html', templateData);
+
+  const afterRenderResult = pluginManager.applyAfterRender({
+    html,
+    page: pageInfo
+  });
+  html = afterRenderResult.html;
 
   return {
     html,
@@ -408,7 +482,8 @@ function processMarkdownFileLocale(
   navItems: NavItem[],
   locale: LocaleConfig,
   allLocales: LocaleConfig[],
-  localeDocsDir: string
+  localeDocsDir: string,
+  pluginManager: PluginManager
 ) {
   const rawContent = fs.readFileSync(filePath, 'utf-8');
   const docsRelPath = path.relative(localeDocsDir, filePath);
@@ -425,8 +500,29 @@ function processMarkdownFileLocale(
     path: fullPath,
     url: fullUrl
   };
-  const htmlContent = markdownParser.render(resolvedContent);
+  let htmlContent = markdownParser.render(resolvedContent);
   const plainText = markdownParser.extractPlainText(resolvedContent);
+
+  const pageInfo: PageInfo = { filePath, relativePath, meta, htmlPath: '' };
+
+  let htmlRelPath: string;
+  if (docsRelPath.endsWith('/index.md')) {
+    htmlRelPath = docsRelPath.replace(/\.md$/, '.html');
+  } else if (docsRelPath === 'index.md') {
+    htmlRelPath = 'index.html';
+  } else {
+    htmlRelPath = docsRelPath.replace(/\.md$/, '.html');
+  }
+  pageInfo.htmlPath = htmlRelPath;
+
+  const parsedData: MarkdownParsedData = {
+    filePath,
+    rawContent,
+    html: htmlContent,
+    meta
+  };
+  const parsedResult = pluginManager.applyMarkdownParsed(parsedData);
+  htmlContent = parsedResult.html;
 
   const currentPath = meta.path;
   const navHtml = navGenerator.renderNavHtml(navItems, currentPath, config.basePath);
@@ -440,7 +536,9 @@ function processMarkdownFileLocale(
     isCurrent: l.code === locale.code
   }));
 
-  const templateData = {
+  const headTags = pluginManager.getHeadTags().join('\n  ');
+
+  let templateData: Record<string, any> = {
     site: config,
     page: meta,
     nav: navHtml,
@@ -459,19 +557,23 @@ function processMarkdownFileLocale(
     pageLang: locale.code,
     logoHref: basePath + locale.code + '/',
     hasLocales: true,
-    searchIndexPath: basePath + locale.code + '/search-index.js'
+    searchIndexPath: basePath + locale.code + '/search-index.js',
+    pluginHeadTags: headTags
   };
 
-  const html = templateEngine.render('layout.html', templateData);
+  const beforeRenderResult = pluginManager.applyBeforeRender({
+    templateData,
+    page: pageInfo
+  });
+  templateData = beforeRenderResult.templateData;
 
-  let htmlRelPath: string;
-  if (docsRelPath.endsWith('/index.md')) {
-    htmlRelPath = docsRelPath.replace(/\.md$/, '.html');
-  } else if (docsRelPath === 'index.md') {
-    htmlRelPath = 'index.html';
-  } else {
-    htmlRelPath = docsRelPath.replace(/\.md$/, '.html');
-  }
+  let html = templateEngine.render('layout.html', templateData);
+
+  const afterRenderResult = pluginManager.applyAfterRender({
+    html,
+    page: pageInfo
+  });
+  html = afterRenderResult.html;
 
   return {
     html,
@@ -880,12 +982,36 @@ h6:hover .heading-anchor { opacity: 1; }
   overflow-x: auto;
   margin: 1.2em 0;
   border: 1px solid var(--border);
+  position: relative;
 }
 .doc-content pre code {
   background: none;
   padding: 0;
   font-size: 13px;
   line-height: 1.6;
+}
+
+.copy-code-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.doc-content pre:hover .copy-code-btn {
+  opacity: 1;
+}
+.copy-code-btn:hover {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
 }
 
 /* ========== 任务列表 ========== */
@@ -1000,40 +1126,95 @@ h6:hover .heading-anchor { opacity: 1; }
 }
 .toc a:hover { color: var(--primary); }
 
+/* ========== 阅读时间 ========== */
+.reading-time {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 1em;
+}
+
+/* ========== 自动目录导航栏 ========== */
+.auto-toc-nav {
+  position: fixed;
+  top: calc(var(--header-height) + 32px);
+  right: 32px;
+  width: 200px;
+  max-height: calc(100vh - var(--header-height) - 64px);
+  overflow-y: auto;
+  font-size: 13px;
+  border-left: 2px solid var(--border);
+  padding-left: 12px;
+}
+.auto-toc-nav-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+.auto-toc-nav ul {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+}
+.auto-toc-nav li {
+  margin: 6px 0;
+}
+.auto-toc-nav a {
+  color: var(--text-muted);
+  text-decoration: none;
+  display: block;
+  padding: 2px 0;
+  transition: color 0.2s;
+}
+.auto-toc-nav a:hover {
+  color: var(--primary);
+}
+.auto-toc-nav a.active {
+  color: var(--primary);
+  font-weight: 600;
+}
+.auto-toc-nav .toc-h3 {
+  padding-left: 12px;
+}
+
+@media (max-width: 1280px) {
+  .auto-toc-nav { display: none; }
+}
+
 /* ========== 响应式 ========== */
 @media (max-width: 960px) {
   :root { --sidebar-width: 260px; }
-  
+
   .sidebar {
     transform: translateX(-100%);
     box-shadow: 4px 0 20px rgba(0,0,0,0.1);
   }
   .sidebar.open { transform: translateX(0); }
-  
+
   .sidebar-toggle { display: block; }
-  
+
   .content {
     margin-left: 0;
     padding: 20px;
     padding-top: 72px;
   }
-  
+
   .search-box { width: 220px; }
 }
 
 @media (max-width: 640px) {
   :root { --header-height: 56px; }
-  
+
   .header-inner { padding: 0 16px; }
-  
+
   .search-box { width: 160px; }
   #search-input { padding: 6px 10px 6px 32px; font-size: 13px; }
-  
+
   .content { padding: 16px; padding-top: 64px; }
-  
+
   .doc-content h1 { font-size: 1.6em; }
   .doc-content h2 { font-size: 1.3em; }
-  
+
   .logo { font-size: 16px; }
 }
 
@@ -1116,13 +1297,13 @@ h6:hover .heading-anchor { opacity: 1; }
 
 function generateAppJs(config: SiteConfig): string {
   const basePath = config.basePath.endsWith('/') ? config.basePath : config.basePath + '/';
-  
+
   return `(function() {
   'use strict';
 
   // ========== 主题切换 ==========
   var THEME_KEY = 'mdsite-theme';
-  
+
   function getInitialTheme() {
     try {
       var stored = localStorage.getItem(THEME_KEY);
@@ -1133,7 +1314,7 @@ function generateAppJs(config: SiteConfig): string {
     }
     return 'light';
   }
-  
+
   function applyTheme(theme) {
     if (theme === 'dark') {
       document.documentElement.setAttribute('data-theme', 'dark');
@@ -1146,20 +1327,20 @@ function generateAppJs(config: SiteConfig): string {
     }
     try { localStorage.setItem(THEME_KEY, theme); } catch(e) {}
   }
-  
+
   var initialTheme = getInitialTheme();
   applyTheme(initialTheme);
-  
+
   function initThemeToggle() {
     var btn = document.getElementById('theme-toggle');
     if (!btn) return;
-    
+
     var updateBtn = function() {
       var current = document.documentElement.getAttribute('data-theme');
       btn.textContent = current === 'dark' ? '☀️' : '🌙';
     };
     updateBtn();
-    
+
     btn.addEventListener('click', function() {
       var current = document.documentElement.getAttribute('data-theme');
       var next = current === 'dark' ? 'light' : 'dark';
@@ -1186,20 +1367,20 @@ function generateAppJs(config: SiteConfig): string {
     var toggle = document.getElementById('sidebar-toggle');
     var sidebar = document.getElementById('sidebar');
     if (!toggle || !sidebar) return;
-    
+
     toggle.addEventListener('click', function(e) {
       e.stopPropagation();
       sidebar.classList.toggle('open');
     });
-    
+
     document.addEventListener('click', function(e) {
-      if (sidebar.classList.contains('open') && 
-          !sidebar.contains(e.target) && 
+      if (sidebar.classList.contains('open') &&
+          !sidebar.contains(e.target) &&
           e.target !== toggle) {
         sidebar.classList.remove('open');
       }
     });
-    
+
     var navLinks = sidebar.querySelectorAll('.nav-link');
     navLinks.forEach(function(link) {
       link.addEventListener('click', function() {
@@ -1214,7 +1395,7 @@ function generateAppJs(config: SiteConfig): string {
   function initMermaid() {
     var diagrams = document.querySelectorAll('.mermaid-diagram[data-mermaid]');
     if (diagrams.length === 0) return;
-    
+
     var script = document.createElement('script');
     script.src = 'https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js';
     script.onload = function() {
@@ -1254,14 +1435,14 @@ function generateAppJs(config: SiteConfig): string {
         }, 100);
       }
     }
-    
+
     window.addEventListener('load', scrollToHash);
     window.addEventListener('hashchange', scrollToHash);
   }
 
   // ========== 语言切换 ==========
   var BASE_PATH = ${JSON.stringify(basePath)};
-  
+
   function initLangSwitcher() {
     var toggle = document.getElementById('lang-toggle');
     var menu = document.getElementById('lang-menu');
@@ -1358,8 +1539,8 @@ function generateAppJs(config: SiteConfig): string {
     });
 
     document.addEventListener('click', function(e) {
-      if (menu.classList.contains('open') && 
-          !menu.contains(e.target) && 
+      if (menu.classList.contains('open') &&
+          !menu.contains(e.target) &&
           e.target !== toggle) {
         menu.classList.remove('open');
       }
@@ -1376,12 +1557,83 @@ function generateAppJs(config: SiteConfig): string {
     });
   }
 
+  // ========== 复制代码按钮 ==========
+  function initCopyCode() {
+    document.querySelectorAll('.copy-code-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var pre = btn.parentElement;
+        var code = pre.querySelector('code');
+        if (!code) return;
+        var text = code.textContent || '';
+        navigator.clipboard.writeText(text).then(function() {
+          btn.textContent = '已复制';
+          setTimeout(function() {
+            btn.textContent = '复制';
+          }, 2000);
+        }).catch(function() {
+          var ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); btn.textContent = '已复制'; setTimeout(function() { btn.textContent = '复制'; }, 2000); } catch(e) {}
+          document.body.removeChild(ta);
+        });
+      });
+    });
+  }
+
+  // ========== 自动目录导航高亮 ==========
+  function initAutoToc() {
+    var tocNav = document.querySelector('.auto-toc-nav');
+    if (!tocNav) return;
+
+    var links = tocNav.querySelectorAll('a');
+    var headings = [];
+    links.forEach(function(link) {
+      var id = link.getAttribute('href');
+      if (id && id.charAt(0) === '#') {
+        var el = document.getElementById(id.slice(1));
+        if (el) headings.push({ el: el, link: link });
+      }
+    });
+
+    if (headings.length === 0) return;
+
+    function updateActive() {
+      var headerHeight = 80;
+      var activeHeading = null;
+      for (var i = headings.length - 1; i >= 0; i--) {
+        var rect = headings[i].el.getBoundingClientRect();
+        if (rect.top <= headerHeight) {
+          activeHeading = headings[i];
+          break;
+        }
+      }
+      if (!activeHeading && headings.length > 0) {
+        activeHeading = headings[0];
+      }
+      links.forEach(function(l) { l.classList.remove('active'); });
+      if (activeHeading) {
+        activeHeading.link.classList.add('active');
+      }
+    }
+
+    var scrollTimer = null;
+    window.addEventListener('scroll', function() {
+      if (scrollTimer) clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(updateActive, 50);
+    });
+    updateActive();
+  }
+
   // ========== WebSocket 热更新 ==========
   var ws = null;
   function initHotReload() {
     var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     var url = protocol + '//' + location.host + '/__hmr';
-    
+
     try {
       ws = new WebSocket(url);
       ws.onmessage = function(event) {
@@ -1405,11 +1657,13 @@ function generateAppJs(config: SiteConfig): string {
     initMermaid();
     initAnchorScroll();
     initLangSwitcher();
+    initCopyCode();
+    initAutoToc();
     if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
       initHotReload();
     }
   }
-  
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {

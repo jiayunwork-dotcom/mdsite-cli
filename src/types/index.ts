@@ -4,6 +4,11 @@ export interface LocaleConfig {
   dir: string;
 }
 
+export interface PluginConfig {
+  name: string;
+  options?: Record<string, any>;
+}
+
 export interface SiteConfig {
   title: string;
   description: string;
@@ -15,6 +20,7 @@ export interface SiteConfig {
   googleAnalyticsId: string;
   favicon: string;
   locales?: LocaleConfig[];
+  plugins?: PluginConfig[];
 }
 
 export interface NavItem {
@@ -89,4 +95,68 @@ export interface RenderContext {
   locales?: LocaleConfig[];
   currentLocale?: string;
   langCode?: string;
+}
+
+export interface PluginLogger {
+  info: (...args: any[]) => void;
+  warn: (...args: any[]) => void;
+  error: (...args: any[]) => void;
+}
+
+export interface PluginContext {
+  logger: PluginLogger;
+  config: SiteConfig;
+  options: Record<string, any>;
+  addAsset: (path: string, content: string | Buffer) => void;
+  addHeadTag: (tag: string) => void;
+  getPages: () => PageInfo[];
+}
+
+export interface PageInfo {
+  filePath: string;
+  relativePath: string;
+  meta: PageMeta;
+  htmlPath: string;
+}
+
+export interface MarkdownParsedData {
+  filePath: string;
+  rawContent: string;
+  html: string;
+  meta: PageMeta;
+}
+
+export interface BeforeRenderData {
+  templateData: Record<string, any>;
+  page: PageInfo;
+}
+
+export interface AfterRenderData {
+  html: string;
+  page: PageInfo;
+}
+
+export interface BuildCompleteData {
+  totalFiles: number;
+  rebuiltFiles: number;
+  skippedFiles: number;
+  elapsedTime: number;
+}
+
+export interface PluginHooks {
+  onConfigLoaded?: (config: SiteConfig) => SiteConfig;
+  onBeforeBuild?: (context: PluginContext) => void | Promise<void>;
+  onMarkdownParsed?: (data: MarkdownParsedData, context: PluginContext) => MarkdownParsedData;
+  onBeforeRender?: (data: BeforeRenderData, context: PluginContext) => BeforeRenderData;
+  onAfterRender?: (data: AfterRenderData, context: PluginContext) => AfterRenderData;
+  onBuildComplete?: (data: BuildCompleteData, context: PluginContext) => void;
+  onDevServerStart?: (server: any, context: PluginContext) => void;
+}
+
+export type PluginFactory = (context: PluginContext) => PluginHooks;
+
+export interface LoadedPlugin {
+  name: string;
+  hooks: PluginHooks;
+  context: PluginContext;
 }
