@@ -1,0 +1,51 @@
+{
+  "name": "mdsite-cli",
+  "version": "1.0.0",
+  "description": "Markdown文档静态站点生成器命令行工具",
+  "bin": {
+    "mdsite": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "markdown",
+    "static-site-generator",
+    "documentation",
+    "cli"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "chokidar": "^3.5.3",
+    "commander": "^11.1.0",
+    "flexsearch": "^0.7.43",
+    "fs-extra": "^11.1.1",
+    "highlight.js": "^11.9.0",
+    "js-yaml": "^4.1.0",
+    "katex": "^0.16.9",
+    "markdown-it": "^14.0.0",
+    "markdown-it-anchor": "^8.6.7",
+    "markdown-it-container": "^4.0.0",
+    "markdown-it-footnote": "^4.0.0",
+    "markdown-it-task-lists": "^2.1.1",
+    "markdown-it-toc-done-right": "^4.2.0",
+    "mermaid": "^10.6.1",
+    "picocolors": "^1.0.0",
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "@types/flexsearch": "^0.7.6",
+    "@types/fs-extra": "^11.0.4",
+    "@types/js-yaml": "^4.0.9",
+    "@types/katex": "^0.16.7",
+    "@types/markdown-it": "^13.0.7",
+    "@types/node": "^20.10.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.3.2"
+  }
+}
