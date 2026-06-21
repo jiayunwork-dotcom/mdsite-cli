@@ -1,13 +1,13 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import * as pc from 'picocolors';
-import { loadConfig } from '../core/config';
+import { loadConfig, isMultiLocale, getDefaultLocale } from '../core/config';
 import { TemplateEngine } from '../core/template-engine';
 import { MarkdownParser } from '../core/markdown-parser';
 import { NavigationGenerator } from '../core/navigation';
 import { BuildCacheManager } from '../core/build-cache';
 import { SearchIndexer, SeoGenerator } from '../core/search-seo';
-import { BuildStats, NavItem, PageMeta, SiteConfig } from '../types';
+import { BuildStats, LocaleConfig, NavItem, PageMeta, SiteConfig } from '../types';
 
 interface BuildOptions {
   clean?: boolean;
@@ -25,7 +25,6 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
   const config = loadConfig(cwd);
   const templateEngine = new TemplateEngine(cwd);
   const markdownParser = new MarkdownParser(cwd);
-  const navGenerator = new NavigationGenerator(cwd);
   const cacheManager = new BuildCacheManager(cwd);
   const searchIndexer = new SearchIndexer(cwd, config);
   const seoGenerator = new SeoGenerator(cwd, config);
@@ -34,109 +33,236 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
     cacheManager.clear();
   }
 
-  const docsDir = path.join(cwd, 'docs');
   const distDir = path.join(cwd, 'dist');
   const publicDir = path.join(cwd, 'public');
-
-  if (!fs.existsSync(docsDir)) {
-    console.error(pc.red('✗ docs/ 目录不存在，请先运行 mdsite init'));
-    process.exit(1);
-  }
-
   fs.mkdirpSync(distDir);
 
   const currentTemplateHash = templateEngine.getTemplatesHash();
-  const currentSidebarHash = navGenerator.getSidebarHash();
   const cachedTemplateHash = cacheManager.getTemplateHash();
-  const cachedSidebarHash = cacheManager.getSidebarHash();
-  const globalChanged = cachedTemplateHash !== currentTemplateHash || 
-                       cachedSidebarHash !== currentSidebarHash;
+  const globalChanged = cachedTemplateHash !== currentTemplateHash;
 
   if (globalChanged) {
-    console.log(pc.yellow('📋 模板或导航结构已变更，将执行全量构建'));
-  }
-
-  const navItems = navGenerator.generate();
-  const markdownFiles = scanMarkdownFiles(docsDir);
-
-  const fileHashes: Record<string, string> = {};
-  for (const file of markdownFiles) {
-    const relativePath = path.relative(cwd, file);
-    fileHashes[relativePath] = cacheManager.computeFileHash(file);
-  }
-
-  let staleFiles: Set<string>;
-  if (globalChanged) {
-    staleFiles = new Set(markdownFiles.map(f => path.relative(cwd, f)));
-  } else {
-    const directlyStale = cacheManager.getStaleFiles(fileHashes);
-    staleFiles = new Set(directlyStale);
-    
-    for (const file of directlyStale) {
-      const dependents = cacheManager.findFilesDependingOn(file);
-      for (const dep of dependents) {
-        staleFiles.add(dep);
-      }
-    }
+    console.log(pc.yellow('📋 模板结构已变更，将执行全量构建'));
   }
 
   const rebuilt: string[] = [];
   const skipped: string[] = [];
-  const allPages: { meta: PageMeta; htmlPath: string }[] = [];
+  let totalFiles = 0;
 
-  for (const file of markdownFiles) {
-    const relativePath = path.relative(cwd, file);
-    const docsRelPath = path.relative(docsDir, file);
-    
-    let pageData: { meta: PageMeta; plainText: string; includes: string[] } | null = null;
-    
-    try {
-      const rawContent = fs.readFileSync(file, 'utf-8');
-      const { content: resolvedContent, includes } = markdownParser.parseIncludes(rawContent, file);
-      const meta = markdownParser.getPageMeta(resolvedContent, docsRelPath, config.basePath);
-      const plainText = markdownParser.extractPlainText(resolvedContent);
-      pageData = { meta, plainText, includes };
+  const multiLocale = isMultiLocale(config);
+
+  if (multiLocale) {
+    const locales = config.locales!;
+    const defaultLocale = locales[0];
+
+    console.log(pc.cyan(`🌐 多语言模式: 检测到 ${locales.length} 个语言版本`));
+
+    for (const locale of locales) {
+      console.log(pc.dim(`  处理语言: ${locale.name} (${locale.code})`));
       
-      seoGenerator.addUrl(meta.url);
-      
-      if (config.search) {
-        searchIndexer.addDocument({
-          id: relativePath,
-          title: meta.title,
-          content: plainText,
-          path: meta.url
-        });
+      const localeDocsDir = path.isAbsolute(locale.dir) ? locale.dir : path.join(cwd, locale.dir);
+      if (!fs.existsSync(localeDocsDir)) {
+        console.warn(pc.yellow(`    ⚠ 语言目录不存在: ${locale.dir}, 跳过`));
+        continue;
       }
-    } catch (e) {}
-    
-    if (!staleFiles.has(relativePath) && !globalChanged) {
-      skipped.push(relativePath);
-      continue;
+
+      const navGenerator = new NavigationGenerator(cwd, localeDocsDir);
+      searchIndexer.setCurrentLocale(locale.code);
+      seoGenerator.setCurrentLocale(locale.code);
+
+      const currentSidebarHash = navGenerator.getSidebarHash();
+      const cachedSidebarHash = cacheManager.getSidebarHash();
+      const localeGlobalChanged = globalChanged || cachedSidebarHash !== currentSidebarHash;
+
+      const navItems = navGenerator.generate(locale.code);
+      const markdownFiles = scanMarkdownFiles(localeDocsDir);
+      totalFiles += markdownFiles.length;
+
+      const fileHashes: Record<string, string> = {};
+      for (const file of markdownFiles) {
+        const relativePath = path.relative(cwd, file);
+        fileHashes[relativePath] = cacheManager.computeFileHash(file);
+      }
+
+      let staleFiles: Set<string>;
+      if (localeGlobalChanged) {
+        staleFiles = new Set(markdownFiles.map(f => path.relative(cwd, f)));
+      } else {
+        const directlyStale = cacheManager.getStaleFiles(fileHashes);
+        staleFiles = new Set(directlyStale);
+        
+        for (const file of directlyStale) {
+          const dependents = cacheManager.findFilesDependingOn(file);
+          for (const dep of dependents) {
+            staleFiles.add(dep);
+          }
+        }
+      }
+
+      for (const file of markdownFiles) {
+        const relativePath = path.relative(cwd, file);
+        const docsRelPath = path.relative(localeDocsDir, file);
+        
+        let pageData: { meta: PageMeta; plainText: string; includes: string[]; relPath: string } | null = null;
+        
+        try {
+          const rawContent = fs.readFileSync(file, 'utf-8');
+          const { content: resolvedContent, includes } = markdownParser.parseIncludes(rawContent, file);
+          const metaBase = markdownParser.getPageMeta(resolvedContent, docsRelPath, config.basePath);
+          const plainText = markdownParser.extractPlainText(resolvedContent);
+          
+          const urlPrefix = '/' + locale.code;
+          const fullPath = urlPrefix + (metaBase.path.startsWith('/') ? metaBase.path : '/' + metaBase.path);
+          const basePath = config.basePath.endsWith('/') ? config.basePath : config.basePath + '/';
+          const fullUrl = basePath + fullPath.replace(/^\//, '');
+          const meta: PageMeta = {
+            ...metaBase,
+            path: fullPath,
+            url: fullUrl
+          };
+          
+          const relPath = docsRelPath.replace(/\.md$/, '').replace(/\/index$/, '/').replace(/^index$/, '/');
+          
+          pageData = { meta, plainText, includes, relPath };
+          
+          seoGenerator.addUrl(meta.url, relPath);
+          
+          if (config.search) {
+            searchIndexer.addDocument({
+              id: relativePath,
+              title: meta.title,
+              content: plainText,
+              path: meta.url
+            });
+          }
+        } catch (e) {}
+        
+        if (!staleFiles.has(relativePath) && !localeGlobalChanged) {
+          skipped.push(relativePath);
+          continue;
+        }
+
+        try {
+          const page = processMarkdownFileLocale(
+            file, relativePath, cwd, config, markdownParser,
+            templateEngine, navGenerator, navItems, locale, locales, localeDocsDir
+          );
+
+          const htmlRelPath = path.posix.join(locale.code, page.htmlPath);
+          const htmlFullPath = path.join(distDir, htmlRelPath);
+          fs.mkdirpSync(path.dirname(htmlFullPath));
+          fs.writeFileSync(htmlFullPath, page.html, 'utf-8');
+
+          if (locale.code === defaultLocale.code) {
+            const rootHtmlFullPath = path.join(distDir, page.htmlPath);
+            fs.mkdirpSync(path.dirname(rootHtmlFullPath));
+            fs.writeFileSync(rootHtmlFullPath, page.html, 'utf-8');
+          }
+
+          const fileEntry = {
+            hash: fileHashes[relativePath],
+            includes: page.includes,
+            lastModified: Date.now()
+          };
+          cacheManager.setFileCache(relativePath, fileEntry);
+
+          rebuilt.push(relativePath);
+
+        } catch (e) {
+          console.error(pc.red(`✗ 处理文件失败: ${relativePath}`), e);
+        }
+      }
+    }
+  } else {
+    const docsDir = path.join(cwd, 'docs');
+    if (!fs.existsSync(docsDir)) {
+      console.error(pc.red('✗ docs/ 目录不存在，请先运行 mdsite init'));
+      process.exit(1);
     }
 
-    try {
-      const page = processMarkdownFile(
-        file, relativePath, cwd, config, markdownParser,
-        templateEngine, navGenerator, navItems
-      );
+    const navGenerator = new NavigationGenerator(cwd);
+    const currentSidebarHash = navGenerator.getSidebarHash();
+    const cachedSidebarHash = cacheManager.getSidebarHash();
+    const localeGlobalChanged = globalChanged || cachedSidebarHash !== currentSidebarHash;
 
-      const htmlRelPath = page.htmlPath;
-      const htmlFullPath = path.join(distDir, htmlRelPath);
-      fs.mkdirpSync(path.dirname(htmlFullPath));
-      fs.writeFileSync(htmlFullPath, page.html, 'utf-8');
+    const navItems = navGenerator.generate();
+    const markdownFiles = scanMarkdownFiles(docsDir);
+    totalFiles = markdownFiles.length;
 
-      const fileEntry = {
-        hash: fileHashes[relativePath],
-        includes: page.includes,
-        lastModified: Date.now()
-      };
-      cacheManager.setFileCache(relativePath, fileEntry);
+    const fileHashes: Record<string, string> = {};
+    for (const file of markdownFiles) {
+      const relativePath = path.relative(cwd, file);
+      fileHashes[relativePath] = cacheManager.computeFileHash(file);
+    }
 
-      rebuilt.push(relativePath);
-      allPages.push({ meta: page.meta, htmlPath: htmlRelPath });
+    let staleFiles: Set<string>;
+    if (localeGlobalChanged) {
+      staleFiles = new Set(markdownFiles.map(f => path.relative(cwd, f)));
+    } else {
+      const directlyStale = cacheManager.getStaleFiles(fileHashes);
+      staleFiles = new Set(directlyStale);
+      
+      for (const file of directlyStale) {
+        const dependents = cacheManager.findFilesDependingOn(file);
+        for (const dep of dependents) {
+          staleFiles.add(dep);
+        }
+      }
+    }
 
-    } catch (e) {
-      console.error(pc.red(`✗ 处理文件失败: ${relativePath}`), e);
+    for (const file of markdownFiles) {
+      const relativePath = path.relative(cwd, file);
+      const docsRelPath = path.relative(docsDir, file);
+      
+      let pageData: { meta: PageMeta; plainText: string; includes: string[] } | null = null;
+      
+      try {
+        const rawContent = fs.readFileSync(file, 'utf-8');
+        const { content: resolvedContent, includes } = markdownParser.parseIncludes(rawContent, file);
+        const meta = markdownParser.getPageMeta(resolvedContent, docsRelPath, config.basePath);
+        const plainText = markdownParser.extractPlainText(resolvedContent);
+        pageData = { meta, plainText, includes };
+        
+        seoGenerator.addUrl(meta.url);
+        
+        if (config.search) {
+          searchIndexer.addDocument({
+            id: relativePath,
+            title: meta.title,
+            content: plainText,
+            path: meta.url
+          });
+        }
+      } catch (e) {}
+      
+      if (!staleFiles.has(relativePath) && !localeGlobalChanged) {
+        skipped.push(relativePath);
+        continue;
+      }
+
+      try {
+        const page = processMarkdownFile(
+          file, relativePath, cwd, config, markdownParser,
+          templateEngine, navGenerator, navItems
+        );
+
+        const htmlRelPath = page.htmlPath;
+        const htmlFullPath = path.join(distDir, htmlRelPath);
+        fs.mkdirpSync(path.dirname(htmlFullPath));
+        fs.writeFileSync(htmlFullPath, page.html, 'utf-8');
+
+        const fileEntry = {
+          hash: fileHashes[relativePath],
+          includes: page.includes,
+          lastModified: Date.now()
+        };
+        cacheManager.setFileCache(relativePath, fileEntry);
+
+        rebuilt.push(relativePath);
+
+      } catch (e) {
+        console.error(pc.red(`✗ 处理文件失败: ${relativePath}`), e);
+      }
     }
   }
 
@@ -153,16 +279,14 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
   copyCoreAssets(cwd, distDir, config);
 
   cacheManager.setTemplateHash(currentTemplateHash);
-  cacheManager.setSidebarHash(currentSidebarHash);
   cacheManager.save();
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-  const total = markdownFiles.length;
 
   console.log('');
   console.log(pc.bold(pc.green('✅ 构建完成！')));
   console.log(pc.dim('─'.repeat(40)));
-  console.log(`  总文件数:  ${pc.cyan(String(total))}`);
+  console.log(`  总文件数:  ${pc.cyan(String(totalFiles))}`);
   console.log(`  重新构建: ${pc.green(String(rebuilt.length))}`);
   console.log(`  跳过:     ${pc.gray(String(skipped.length))}`);
   console.log(`  耗时:     ${pc.yellow(elapsed + 's')}`);
@@ -182,7 +306,7 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
   return {
     rebuilt: rebuilt.length,
     skipped: skipped.length,
-    total,
+    total: totalFiles,
     time: Date.now() - startTime,
     files: { rebuilt, skipped }
   };
@@ -233,18 +357,109 @@ function processMarkdownFile(
   const currentPath = meta.path;
   const navHtml = navGenerator.renderNavHtml(navItems, currentPath, config.basePath);
 
+  const basePath = config.basePath.endsWith('/') ? config.basePath : config.basePath + '/';
+
   const templateData = {
     site: config,
     page: meta,
     nav: navHtml,
     content: htmlContent,
-    basePath: config.basePath.endsWith('/') ? config.basePath : config.basePath + '/',
+    basePath: basePath,
     currentPath: currentPath,
     searchEnabled: config.search,
     darkModeEnabled: config.darkMode,
     headHtml: config.headHtml,
     gaId: config.googleAnalyticsId,
-    favicon: config.favicon
+    favicon: config.favicon,
+    pageLang: 'zh-CN',
+    logoHref: basePath,
+    hasLocales: false,
+    searchIndexPath: basePath + 'search-index.js'
+  };
+
+  const html = templateEngine.render('layout.html', templateData);
+
+  let htmlRelPath: string;
+  if (docsRelPath.endsWith('/index.md')) {
+    htmlRelPath = docsRelPath.replace(/\.md$/, '.html');
+  } else if (docsRelPath === 'index.md') {
+    htmlRelPath = 'index.html';
+  } else {
+    htmlRelPath = docsRelPath.replace(/\.md$/, '.html');
+  }
+
+  return {
+    html,
+    meta,
+    includes,
+    plainText,
+    htmlPath: htmlRelPath
+  };
+}
+
+function processMarkdownFileLocale(
+  filePath: string,
+  relativePath: string,
+  cwd: string,
+  config: SiteConfig,
+  markdownParser: MarkdownParser,
+  templateEngine: TemplateEngine,
+  navGenerator: NavigationGenerator,
+  navItems: NavItem[],
+  locale: LocaleConfig,
+  allLocales: LocaleConfig[],
+  localeDocsDir: string
+) {
+  const rawContent = fs.readFileSync(filePath, 'utf-8');
+  const docsRelPath = path.relative(localeDocsDir, filePath);
+
+  const { content: resolvedContent, includes } = markdownParser.parseIncludes(rawContent, filePath);
+
+  const metaBase = markdownParser.getPageMeta(resolvedContent, docsRelPath, config.basePath);
+  const urlPrefix = '/' + locale.code;
+  const fullPath = urlPrefix + (metaBase.path.startsWith('/') ? metaBase.path : '/' + metaBase.path);
+  const basePathForUrl = config.basePath.endsWith('/') ? config.basePath : config.basePath + '/';
+  const fullUrl = basePathForUrl + fullPath.replace(/^\//, '');
+  const meta: PageMeta = {
+    ...metaBase,
+    path: fullPath,
+    url: fullUrl
+  };
+  const htmlContent = markdownParser.render(resolvedContent);
+  const plainText = markdownParser.extractPlainText(resolvedContent);
+
+  const currentPath = meta.path;
+  const navHtml = navGenerator.renderNavHtml(navItems, currentPath, config.basePath);
+
+  const basePath = config.basePath.endsWith('/') ? config.basePath : config.basePath + '/';
+
+  const templateLocales = allLocales.map(l => ({
+    code: l.code,
+    name: l.name,
+    dir: l.dir,
+    isCurrent: l.code === locale.code
+  }));
+
+  const templateData = {
+    site: config,
+    page: meta,
+    nav: navHtml,
+    content: htmlContent,
+    basePath: basePath,
+    currentPath: currentPath,
+    searchEnabled: config.search,
+    darkModeEnabled: config.darkMode,
+    headHtml: config.headHtml,
+    gaId: config.googleAnalyticsId,
+    favicon: config.favicon,
+    locales: templateLocales,
+    currentLocale: locale.code,
+    currentLocaleName: locale.name,
+    langCode: locale.code,
+    pageLang: locale.code,
+    logoHref: basePath + locale.code + '/',
+    hasLocales: true,
+    searchIndexPath: basePath + locale.code + '/search-index.js'
   };
 
   const html = templateEngine.render('layout.html', templateData);
@@ -830,6 +1045,72 @@ h6:hover .heading-anchor { opacity: 1; }
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ========== 语言切换器 ========== */
+.lang-switcher {
+  position: relative;
+}
+
+.lang-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text);
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.lang-toggle:hover { background: var(--bg-tertiary); }
+
+.lang-arrow {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.lang-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 140px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+  z-index: 200;
+  overflow: hidden;
+}
+.lang-menu.open { display: block; }
+
+.lang-item {
+  display: block;
+  padding: 10px 16px;
+  text-decoration: none;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.lang-item:hover { background: var(--bg-secondary); }
+.lang-item.active {
+  background: var(--primary-light);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .lang-toggle {
+    padding: 0 8px;
+    font-size: 13px;
+    height: 32px;
+  }
+}
 `;
 }
 
@@ -978,6 +1259,121 @@ function generateAppJs(config: SiteConfig): string {
     window.addEventListener('hashchange', scrollToHash);
   }
 
+  // ========== 语言切换 ==========
+  var BASE_PATH = ${JSON.stringify(basePath)};
+  
+  function initLangSwitcher() {
+    var toggle = document.getElementById('lang-toggle');
+    var menu = document.getElementById('lang-menu');
+    if (!toggle || !menu) return;
+
+    var langItems = menu.querySelectorAll('.lang-item');
+    var availableLangs = [];
+    langItems.forEach(function(item) {
+      availableLangs.push({
+        code: item.getAttribute('data-lang'),
+        name: item.getAttribute('data-name')
+      });
+    });
+
+    if (availableLangs.length === 0) return;
+
+    function getCurrentLang() {
+      var pathname = window.location.pathname;
+      var base = BASE_PATH.replace(/\/$/, '');
+      var relPath = pathname;
+      if (base && relPath.indexOf(base) === 0) {
+        relPath = relPath.slice(base.length);
+      }
+      relPath = relPath.replace(/^\//, '');
+      var parts = relPath.split('/');
+      if (parts.length > 0) {
+        var firstPart = parts[0];
+        for (var i = 0; i < availableLangs.length; i++) {
+          if (availableLangs[i].code === firstPart) {
+            return availableLangs[i].code;
+          }
+        }
+      }
+      return availableLangs[0].code;
+    }
+
+    function getRelativePathWithoutLang() {
+      var pathname = window.location.pathname;
+      var base = BASE_PATH.replace(/\/$/, '');
+      var relPath = pathname;
+      if (base && relPath.indexOf(base) === 0) {
+        relPath = relPath.slice(base.length);
+      }
+      relPath = relPath.replace(/^\//, '');
+      var parts = relPath.split('/');
+      if (parts.length > 0) {
+        var firstPart = parts[0];
+        for (var i = 0; i < availableLangs.length; i++) {
+          if (availableLangs[i].code === firstPart) {
+            parts.shift();
+            break;
+          }
+        }
+      }
+      return parts.join('/');
+    }
+
+    function switchLang(targetLang) {
+      var currentLang = getCurrentLang();
+      if (targetLang === currentLang) return;
+
+      var relPath = getRelativePathWithoutLang();
+      var targetPath = BASE_PATH + targetLang + '/' + relPath;
+      targetPath = targetPath.replace(/\/+$/, '/');
+      if (targetPath.endsWith('/')) {
+        targetPath += 'index.html';
+      }
+
+      var hash = window.location.hash;
+      var finalUrl = targetPath + (hash || '');
+
+      var xhr = new XMLHttpRequest();
+      xhr.open('HEAD', targetPath, true);
+      xhr.onload = function() {
+        if (xhr.status >= 200 && xhr.status < 400) {
+          window.location.href = finalUrl;
+        } else {
+          var fallbackPath = BASE_PATH + targetLang + '/index.html';
+          window.location.href = fallbackPath + (hash || '');
+        }
+      };
+      xhr.onerror = function() {
+        var fallbackPath = BASE_PATH + targetLang + '/index.html';
+        window.location.href = fallbackPath + (hash || '');
+      };
+      xhr.send();
+    }
+
+    toggle.addEventListener('click', function(e) {
+      e.stopPropagation();
+      menu.classList.toggle('open');
+    });
+
+    document.addEventListener('click', function(e) {
+      if (menu.classList.contains('open') && 
+          !menu.contains(e.target) && 
+          e.target !== toggle) {
+        menu.classList.remove('open');
+      }
+    });
+
+    langItems.forEach(function(item) {
+      item.addEventListener('click', function(e) {
+        e.preventDefault();
+        var lang = item.getAttribute('data-lang');
+        if (lang) {
+          switchLang(lang);
+        }
+      });
+    });
+  }
+
   // ========== WebSocket 热更新 ==========
   var ws = null;
   function initHotReload() {
@@ -1006,6 +1402,7 @@ function generateAppJs(config: SiteConfig): string {
     initMobileSidebar();
     initMermaid();
     initAnchorScroll();
+    initLangSwitcher();
     if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
       initHotReload();
     }

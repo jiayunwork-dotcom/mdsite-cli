@@ -125,7 +125,9 @@ export async function dev(cwd: string, options: DevOptions = {}): Promise<void> 
 
   const watchPatterns = [
     path.join(cwd, 'docs', '**', '*.md'),
-    path.join(cwd, 'docs', '_sidebar.yml'),
+    path.join(cwd, 'docs', '**', '_sidebar.yml'),
+    path.join(cwd, '**', 'docs', '**', '*.md'),
+    path.join(cwd, '**', 'docs', '**', '_sidebar.yml'),
     path.join(cwd, 'templates', '**', '*.html'),
     path.join(cwd, 'public', '**', '*'),
     path.join(cwd, 'site.yml')

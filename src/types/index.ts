@@ -1,3 +1,9 @@
+export interface LocaleConfig {
+  code: string;
+  name: string;
+  dir: string;
+}
+
 export interface SiteConfig {
   title: string;
   description: string;
@@ -8,6 +14,7 @@ export interface SiteConfig {
   headHtml: string;
   googleAnalyticsId: string;
   favicon: string;
+  locales?: LocaleConfig[];
 }
 
 export interface NavItem {
@@ -79,4 +86,7 @@ export interface RenderContext {
   headHtml: string;
   gaId: string;
   favicon: string;
+  locales?: LocaleConfig[];
+  currentLocale?: string;
+  langCode?: string;
 }

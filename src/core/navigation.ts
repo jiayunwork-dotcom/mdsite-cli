@@ -9,41 +9,41 @@ export class NavigationGenerator {
   private cwd: string;
   private docsDir: string;
 
-  constructor(cwd: string) {
+  constructor(cwd: string, docsDir?: string) {
     this.cwd = cwd;
-    this.docsDir = path.join(cwd, 'docs');
+    this.docsDir = docsDir || path.join(cwd, 'docs');
   }
 
-  public generate(): NavItem[] {
+  public generate(urlPrefix: string = ''): NavItem[] {
     const sidebarPath = path.join(this.docsDir, SIDEBAR_FILE);
     
     if (fs.existsSync(sidebarPath)) {
       try {
         const config = yaml.load(fs.readFileSync(sidebarPath, 'utf-8')) as SidebarConfig;
-        return this.parseSidebarConfig(config);
+        return this.parseSidebarConfig(config, urlPrefix);
       } catch (e) {
         console.warn('Failed to parse _sidebar.yml, falling back to auto-generated navigation:', e);
       }
     }
     
-    return this.generateFromDirectory(this.docsDir);
+    return this.generateFromDirectory(this.docsDir, '', urlPrefix);
   }
 
-  private parseSidebarConfig(config: SidebarConfig): NavItem[] {
+  private parseSidebarConfig(config: SidebarConfig, urlPrefix: string): NavItem[] {
     const items: NavItem[] = [];
 
     for (const [key, value] of Object.entries(config)) {
       if (typeof value === 'string') {
-        items.push(this.parseItem(key, value));
+        items.push(this.parseItem(key, value, urlPrefix));
       } else if (typeof value === 'object' && value !== null) {
-        items.push(this.parseGroup(key, value as SidebarItemConfig));
+        items.push(this.parseGroup(key, value as SidebarItemConfig, urlPrefix));
       }
     }
 
     return items;
   }
 
-  private parseItem(key: string, value: string): NavItem {
+  private parseItem(key: string, value: string, urlPrefix: string): NavItem {
     if (value.startsWith('http://') || value.startsWith('https://')) {
       return {
         title: key,
@@ -58,23 +58,24 @@ export class NavigationGenerator {
       .replace(/\/index$/, '/');
     
     const filePath = cleanPath.endsWith('/') ? cleanPath : cleanPath + '.html';
-    const urlPath = cleanPath === '' ? '/' : (cleanPath.endsWith('/') ? cleanPath : '/' + cleanPath + '.html');
+    const prefix = urlPrefix ? (urlPrefix.startsWith('/') ? urlPrefix : '/' + urlPrefix) : '';
+    const urlPath = cleanPath === '' ? (prefix || '/') : (cleanPath.endsWith('/') ? prefix + '/' + cleanPath : prefix + '/' + cleanPath + '.html');
 
     return {
       title: key,
-      path: filePath,
+      path: (prefix ? prefix + '/' : '') + filePath,
       href: urlPath
     };
   }
 
-  private parseGroup(key: string, config: SidebarItemConfig): NavItem {
+  private parseGroup(key: string, config: SidebarItemConfig, urlPrefix: string): NavItem {
     const children: NavItem[] = [];
     
     for (const [childKey, childValue] of Object.entries(config.items)) {
       if (typeof childValue === 'string') {
-        children.push(this.parseItem(childKey, childValue));
+        children.push(this.parseItem(childKey, childValue, urlPrefix));
       } else if (typeof childValue === 'object' && childValue !== null) {
-        children.push(this.parseGroup(childKey, childValue as SidebarItemConfig));
+        children.push(this.parseGroup(childKey, childValue as SidebarItemConfig, urlPrefix));
       }
     }
 
@@ -85,7 +86,7 @@ export class NavigationGenerator {
     };
   }
 
-  private generateFromDirectory(dir: string, relativePath: string = ''): NavItem[] {
+  private generateFromDirectory(dir: string, relativePath: string = '', urlPrefix: string = ''): NavItem[] {
     const items: NavItem[] = [];
     
     if (!fs.existsSync(dir)) return items;
@@ -95,6 +96,8 @@ export class NavigationGenerator {
       if (!a.isDirectory() && b.isDirectory()) return 1;
       return a.name.localeCompare(b.name);
     });
+
+    const prefix = urlPrefix ? (urlPrefix.startsWith('/') ? urlPrefix : '/' + urlPrefix) : '';
 
     for (const entry of entries) {
       if (entry.name.startsWith('_') || entry.name.startsWith('.')) {
@@ -108,7 +111,7 @@ export class NavigationGenerator {
       const relPath = path.join(relativePath, entry.name);
 
       if (entry.isDirectory()) {
-        const children = this.generateFromDirectory(fullPath, relPath);
+        const children = this.generateFromDirectory(fullPath, relPath, urlPrefix);
         if (children.length > 0) {
           const indexPath = path.join(fullPath, 'index.md');
           const hasIndex = fs.existsSync(indexPath);
@@ -121,8 +124,8 @@ export class NavigationGenerator {
           };
 
           if (hasIndex) {
-            item.path = dirRelPath;
-            item.href = '/' + dirRelPath;
+            item.path = (prefix ? prefix + '/' : '') + dirRelPath;
+            item.href = prefix + '/' + dirRelPath;
           }
 
           items.push(item);
@@ -131,16 +134,16 @@ export class NavigationGenerator {
         if (relativePath === '' && entry.name === 'index.md') {
           items.unshift({
             title: this.getTitleFromFile(fullPath) || '首页',
-            path: '/',
-            href: '/'
+            path: prefix || '/',
+            href: prefix || '/'
           });
         } else if (entry.name !== 'index.md') {
           const baseName = entry.name.replace(/\.md$/, '');
           const fileRelPath = (relativePath ? relativePath + '/' : '') + baseName + '.html';
           items.push({
             title: this.getTitleFromFile(fullPath) || this.prettyName(baseName),
-            path: '/' + fileRelPath,
-            href: '/' + fileRelPath
+            path: (prefix ? prefix + '/' : '/') + fileRelPath,
+            href: (prefix ? prefix + '/' : '/') + fileRelPath
           });
         }
       }

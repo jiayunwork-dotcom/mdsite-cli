@@ -1,32 +1,74 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import { Document } from 'flexsearch';
-import { SearchDocument, SiteConfig } from '../types';
+import { LocaleConfig, SearchDocument, SiteConfig } from '../types';
 import { segmentChinese, simpleSegment } from './segmenter';
+import { isMultiLocale, getDefaultLocale } from './config';
 
 export class SearchIndexer {
   private cwd: string;
   private config: SiteConfig;
   private documents: SearchDocument[] = [];
+  private documentsByLocale: Record<string, SearchDocument[]> = {};
+  private currentLocale: string = '';
 
   constructor(cwd: string, config: SiteConfig) {
     this.cwd = cwd;
     this.config = config;
   }
 
+  public setCurrentLocale(localeCode: string): void {
+    this.currentLocale = localeCode;
+    if (!this.documentsByLocale[localeCode]) {
+      this.documentsByLocale[localeCode] = [];
+    }
+  }
+
   public addDocument(doc: SearchDocument): void {
-    this.documents.push(doc);
+    const locale = this.currentLocale || 'default';
+    if (!this.documentsByLocale[locale]) {
+      this.documentsByLocale[locale] = [];
+    }
+    this.documentsByLocale[locale].push(doc);
   }
 
   public clear(): void {
-    this.documents = [];
+    this.documentsByLocale = {};
   }
 
   public buildAndWrite(): void {
     const distDir = path.join(this.cwd, 'dist');
     fs.mkdirpSync(distDir);
 
+    if (isMultiLocale(this.config)) {
+      const defaultLocale = getDefaultLocale(this.config);
+      for (const locale of this.config.locales!) {
+        this.writeLocaleIndex(locale.code, distDir);
+        if (defaultLocale && locale.code === defaultLocale.code) {
+          this.writeDefaultIndex(locale.code, distDir);
+        }
+      }
+    } else {
+      this.writeDefaultIndex('', distDir);
+    }
+  }
+
+  private writeDefaultIndex(localeCode: string, distDir: string): void {
     const outputPath = path.join(distDir, 'search-index.js');
+    const docs = localeCode ? (this.documentsByLocale[localeCode] || []) : (this.documentsByLocale['default'] || []);
+    this.writeIndex(outputPath, docs);
+  }
+
+  private writeLocaleIndex(localeCode: string, distDir: string): void {
+    const localeDir = path.join(distDir, localeCode);
+    fs.mkdirpSync(localeDir);
+    const outputPath = path.join(localeDir, 'search-index.js');
+    const docs = this.documentsByLocale[localeCode] || [];
+    this.writeIndex(outputPath, docs);
+  }
+
+  private writeIndex(outputPath: string, documents: SearchDocument[]): void {
+    this.documents = documents;
     
     const indexData = {
       documents: this.documents.map(doc => ({
@@ -235,24 +277,38 @@ export class SearchIndexer {
   }
 }
 
+export interface SeoUrlEntry {
+  loc: string;
+  lastmod: string;
+  locale?: string;
+  relPath?: string;
+}
+
 export class SeoGenerator {
   private cwd: string;
   private config: SiteConfig;
-  private urls: { loc: string; lastmod: string }[] = [];
+  private urls: SeoUrlEntry[] = [];
+  private currentLocale: string = '';
 
   constructor(cwd: string, config: SiteConfig) {
     this.cwd = cwd;
     this.config = config;
   }
 
-  public addUrl(path: string): void {
+  public setCurrentLocale(localeCode: string): void {
+    this.currentLocale = localeCode;
+  }
+
+  public addUrl(path: string, relPath?: string): void {
     const basePath = this.config.basePath.endsWith('/') ? this.config.basePath : this.config.basePath + '/';
     const cleanPath = path.startsWith('/') ? path.slice(1) : path;
     const fullUrl = basePath + cleanPath;
     
     this.urls.push({
       loc: fullUrl,
-      lastmod: new Date().toISOString().split('T')[0]
+      lastmod: new Date().toISOString().split('T')[0],
+      locale: this.currentLocale || undefined,
+      relPath: relPath || undefined
     });
   }
 
@@ -267,12 +323,33 @@ export class SeoGenerator {
     const sortedUrls = [...this.urls].sort((a, b) => a.loc.localeCompare(b.loc));
     
     let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
-    xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
+    xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"';
+    if (isMultiLocale(this.config)) {
+      xml += ' xmlns:xhtml="http://www.w3.org/1999/xhtml"';
+    }
+    xml += '>\n';
+    
+    const multiLocale = isMultiLocale(this.config);
     
     for (const url of sortedUrls) {
       xml += '  <url>\n';
       xml += `    <loc>${this.escapeXml(url.loc)}</loc>\n`;
       xml += `    <lastmod>${url.lastmod}</lastmod>\n`;
+      
+      if (multiLocale && url.relPath) {
+        const alternatives = this.urls.filter(u => u.relPath === url.relPath && u.locale);
+        for (const alt of alternatives) {
+          xml += `    <xhtml:link rel="alternate" hreflang="${alt.locale}" href="${this.escapeXml(alt.loc)}" />\n`;
+        }
+        if (this.config.locales && this.config.locales.length > 0) {
+          const defaultLocale = this.config.locales[0];
+          const defaultAlt = alternatives.find(a => a.locale === defaultLocale.code);
+          if (defaultAlt) {
+            xml += `    <xhtml:link rel="alternate" hreflang="x-default" href="${this.escapeXml(defaultAlt.loc)}" />\n`;
+          }
+        }
+      }
+      
       xml += '  </url>\n';
     }
     

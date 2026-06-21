@@ -16,7 +16,7 @@ export class TemplateEngine {
 
   private getDefaultLayout(): string {
     return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="{{ pageLang }}">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -47,12 +47,27 @@ export class TemplateEngine {
   <div class="app">
     <header class="header">
       <div class="header-inner">
-        <a href="{{ basePath }}" class="logo">{{ site.title }}</a>
+        <a href="{{ logoHref }}" class="logo">{{ site.title }}</a>
         <div class="header-actions">
           {{#if site.search}}
           <div class="search-box">
             <input type="text" id="search-input" placeholder="搜索文档..." />
             <div id="search-results" class="search-results"></div>
+          </div>
+          {{/if}}
+          {{#if hasLocales}}
+          <div class="lang-switcher">
+            <button id="lang-toggle" class="lang-toggle" title="切换语言">
+              <span id="lang-current-name">{{ currentLocaleName }}</span>
+              <span class="lang-arrow">▼</span>
+            </button>
+            <div id="lang-menu" class="lang-menu">
+              {{#for locale in locales}}
+              <a href="#" class="lang-item{{#if locale.isCurrent}} active{{/if}}" data-lang="{{ locale.code }}" data-name="{{ locale.name }}">
+                {{ locale.name }}
+              </a>
+              {{/for}}
+            </div>
           </div>
           {{/if}}
           {{#if site.darkMode}}
@@ -77,7 +92,7 @@ export class TemplateEngine {
   </div>
   <script src="{{ basePath }}assets/app.js"></script>
   {{#if site.search}}
-  <script src="{{ basePath }}search-index.js"></script>
+  <script src="{{ searchIndexPath }}"></script>
   {{/if}}
 </body>
 </html>
@@ -103,20 +118,27 @@ export class TemplateEngine {
   public process(template: string, data: Record<string, any>): string {
     let result = template;
 
-    result = this.processConditionals(result, data);
     result = this.processLoops(result, data);
+    result = this.processConditionals(result, data);
     result = this.processVariables(result, data);
 
     return result;
   }
 
   private processConditionals(template: string, data: Record<string, any>): string {
+    const ifElseRegex = /\{\{#if\s+([\w.]+)\}\}([\s\S]*?)\{\{else\}\}([\s\S]*?)\{\{\/if\}\}/g;
+    let result = template.replace(ifElseRegex, (match, variablePath, trueContent, falseContent) => {
+      const value = this.getNestedValue(data, variablePath);
+      return value ? trueContent : falseContent;
+    });
+
     const ifRegex = /\{\{#if\s+([\w.]+)\}\}([\s\S]*?)\{\{\/if\}\}/g;
-    
-    return template.replace(ifRegex, (match, variablePath, content) => {
+    result = result.replace(ifRegex, (match, variablePath, content) => {
       const value = this.getNestedValue(data, variablePath);
       return value ? content : '';
     });
+
+    return result;
   }
 
   private processLoops(template: string, data: Record<string, any>): string {

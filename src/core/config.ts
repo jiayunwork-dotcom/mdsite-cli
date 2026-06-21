@@ -1,7 +1,7 @@
 import * as fs from 'fs-extra';
 import * as yaml from 'js-yaml';
 import * as path from 'path';
-import { SiteConfig } from '../types';
+import { LocaleConfig, SiteConfig } from '../types';
 
 export const DEFAULT_CONFIG: SiteConfig = {
   title: 'My Documentation',
@@ -14,6 +14,17 @@ export const DEFAULT_CONFIG: SiteConfig = {
   googleAnalyticsId: '',
   favicon: ''
 };
+
+export function getDefaultLocale(config: SiteConfig): LocaleConfig | null {
+  if (!config.locales || config.locales.length === 0) {
+    return null;
+  }
+  return config.locales[0];
+}
+
+export function isMultiLocale(config: SiteConfig): boolean {
+  return !!(config.locales && config.locales.length > 0);
+}
 
 export const CONFIG_FILE_NAME = 'site.yml';
 
@@ -66,5 +77,14 @@ googleAnalyticsId: ''
 
 # favicon路径（相对于public目录）
 favicon: ''
+
+# 多语言配置（可选，不配置则为单语言模式）
+# locales:
+#   - code: zh
+#     name: 中文
+#     dir: docs/zh
+#   - code: en
+#     name: English
+#     dir: docs/en
 `;
 }
