@@ -1278,14 +1278,38 @@ function generateAppJs(config: SiteConfig): string {
 
     if (availableLangs.length === 0) return;
 
-    function getCurrentLang() {
-      var pathname = window.location.pathname;
-      var base = BASE_PATH.replace(/\/$/, '');
+    function removeTrailingSlash(s) {
+      while (s.length > 0 && s.charAt(s.length - 1) === '/') {
+        s = s.slice(0, -1);
+      }
+      return s;
+    }
+
+    function removeLeadingSlash(s) {
+      while (s.length > 0 && s.charAt(0) === '/') {
+        s = s.slice(1);
+      }
+      return s;
+    }
+
+    function collapseTrailingSlashes(s) {
+      while (s.length > 1 && s.charAt(s.length - 1) === '/' && s.charAt(s.length - 2) === '/') {
+        s = s.slice(0, -1);
+      }
+      return s;
+    }
+
+    function stripBase(pathname) {
+      var base = removeTrailingSlash(BASE_PATH);
       var relPath = pathname;
       if (base && relPath.indexOf(base) === 0) {
         relPath = relPath.slice(base.length);
       }
-      relPath = relPath.replace(/^\//, '');
+      return removeLeadingSlash(relPath);
+    }
+
+    function getCurrentLang() {
+      var relPath = stripBase(window.location.pathname);
       var parts = relPath.split('/');
       if (parts.length > 0) {
         var firstPart = parts[0];
@@ -1299,13 +1323,7 @@ function generateAppJs(config: SiteConfig): string {
     }
 
     function getRelativePathWithoutLang() {
-      var pathname = window.location.pathname;
-      var base = BASE_PATH.replace(/\/$/, '');
-      var relPath = pathname;
-      if (base && relPath.indexOf(base) === 0) {
-        relPath = relPath.slice(base.length);
-      }
-      relPath = relPath.replace(/^\//, '');
+      var relPath = stripBase(window.location.pathname);
       var parts = relPath.split('/');
       if (parts.length > 0) {
         var firstPart = parts[0];
@@ -1324,30 +1342,14 @@ function generateAppJs(config: SiteConfig): string {
       if (targetLang === currentLang) return;
 
       var relPath = getRelativePathWithoutLang();
-      var targetPath = BASE_PATH + targetLang + '/' + relPath;
-      targetPath = targetPath.replace(/\/+$/, '/');
+      var targetPath = removeTrailingSlash(BASE_PATH) + '/' + targetLang + '/' + relPath;
+      targetPath = collapseTrailingSlashes(targetPath);
       if (targetPath.endsWith('/')) {
         targetPath += 'index.html';
       }
 
       var hash = window.location.hash;
-      var finalUrl = targetPath + (hash || '');
-
-      var xhr = new XMLHttpRequest();
-      xhr.open('HEAD', targetPath, true);
-      xhr.onload = function() {
-        if (xhr.status >= 200 && xhr.status < 400) {
-          window.location.href = finalUrl;
-        } else {
-          var fallbackPath = BASE_PATH + targetLang + '/index.html';
-          window.location.href = fallbackPath + (hash || '');
-        }
-      };
-      xhr.onerror = function() {
-        var fallbackPath = BASE_PATH + targetLang + '/index.html';
-        window.location.href = fallbackPath + (hash || '');
-      };
-      xhr.send();
+      window.location.href = targetPath + (hash || '');
     }
 
     toggle.addEventListener('click', function(e) {
