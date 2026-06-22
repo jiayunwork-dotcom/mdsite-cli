@@ -103,10 +103,18 @@ export interface PluginLogger {
   error: (...args: any[]) => void;
 }
 
+export interface PluginStore {
+  get(key: string): any;
+  set(key: string, value: any): void;
+  has(key: string): boolean;
+  delete(key: string): boolean;
+}
+
 export interface PluginContext {
   logger: PluginLogger;
   config: SiteConfig;
   options: Record<string, any>;
+  store: PluginStore;
   addAsset: (path: string, content: string | Buffer) => void;
   addHeadTag: (tag: string) => void;
   getPages: () => PageInfo[];
@@ -144,13 +152,14 @@ export interface BuildCompleteData {
 }
 
 export interface PluginHooks {
-  onConfigLoaded?: (config: SiteConfig) => SiteConfig;
+  dependencies?: string[];
+  onConfigLoaded?: (config: SiteConfig) => SiteConfig | Promise<SiteConfig>;
   onBeforeBuild?: (context: PluginContext) => void | Promise<void>;
-  onMarkdownParsed?: (data: MarkdownParsedData, context: PluginContext) => MarkdownParsedData;
-  onBeforeRender?: (data: BeforeRenderData, context: PluginContext) => BeforeRenderData;
-  onAfterRender?: (data: AfterRenderData, context: PluginContext) => AfterRenderData;
-  onBuildComplete?: (data: BuildCompleteData, context: PluginContext) => void;
-  onDevServerStart?: (server: any, context: PluginContext) => void;
+  onMarkdownParsed?: (data: MarkdownParsedData, context: PluginContext) => MarkdownParsedData | Promise<MarkdownParsedData>;
+  onBeforeRender?: (data: BeforeRenderData, context: PluginContext) => BeforeRenderData | Promise<BeforeRenderData>;
+  onAfterRender?: (data: AfterRenderData, context: PluginContext) => AfterRenderData | Promise<AfterRenderData>;
+  onBuildComplete?: (data: BuildCompleteData, context: PluginContext) => void | Promise<void>;
+  onDevServerStart?: (server: any, context: PluginContext) => void | Promise<void>;
 }
 
 export type PluginFactory = (context: PluginContext) => PluginHooks;

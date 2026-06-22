@@ -3,7 +3,6 @@ import { PluginFactory, MarkdownParsedData, BeforeRenderData, PluginContext } fr
 
 const readingTimePlugin: PluginFactory = (context: PluginContext) => {
   const wordsPerMinute = context.options.wordsPerMinute || 200;
-  const readingTimeMap = new Map<string, number>();
 
   return {
     onMarkdownParsed(data: MarkdownParsedData, ctx: PluginContext) {
@@ -26,14 +25,14 @@ const readingTimePlugin: PluginFactory = (context: PluginContext) => {
       const totalWords = chineseChars + englishWords;
       const minutes = Math.max(1, Math.ceil(totalWords / wordsPerMinute));
 
-      readingTimeMap.set(data.filePath, minutes);
+      ctx.store.set(`readingTime:${data.filePath}`, minutes);
 
       return data;
     },
 
     onBeforeRender(data: BeforeRenderData, ctx: PluginContext) {
       const filePath = data.page.filePath;
-      const minutes = readingTimeMap.get(filePath);
+      const minutes = ctx.store.get(`readingTime:${filePath}`);
 
       if (minutes !== undefined) {
         data.templateData.readingTime = `预计阅读${minutes}分钟`;

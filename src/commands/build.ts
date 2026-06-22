@@ -35,7 +35,7 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
     console.log(pc.cyan(`🔌 已加载 ${pluginManager.getPluginNames().length} 个插件`));
   }
 
-  config = pluginManager.applyConfigLoaded(config);
+  config = await pluginManager.applyConfigLoaded(config);
 
   await pluginManager.applyBeforeBuild();
 
@@ -164,7 +164,7 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
         }
 
         try {
-          const page = processMarkdownFileLocale(
+          const page = await processMarkdownFileLocale(
             file, relativePath, cwd, config, markdownParser,
             templateEngine, navGenerator, navItems, locale, locales, localeDocsDir,
             pluginManager
@@ -271,7 +271,7 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
       }
 
       try {
-        const page = processMarkdownFile(
+        const page = await processMarkdownFile(
           file, relativePath, cwd, config, markdownParser,
           templateEngine, navGenerator, navItems, pluginManager
         );
@@ -320,7 +320,7 @@ export async function build(cwd: string, options: BuildOptions = {}): Promise<Bu
 
   const elapsedTime = Date.now() - startTime;
 
-  pluginManager.applyBuildComplete({
+  await pluginManager.applyBuildComplete({
     totalFiles,
     rebuiltFiles: rebuilt.length,
     skippedFiles: skipped.length,
@@ -381,7 +381,7 @@ function scanMarkdownFiles(dir: string): string[] {
   return files.sort();
 }
 
-function processMarkdownFile(
+async function processMarkdownFile(
   filePath: string,
   relativePath: string,
   cwd: string,
@@ -419,7 +419,7 @@ function processMarkdownFile(
     html: htmlContent,
     meta
   };
-  const parsedResult = pluginManager.applyMarkdownParsed(parsedData);
+  const parsedResult = await pluginManager.applyMarkdownParsed(parsedData);
   htmlContent = parsedResult.html;
 
   const currentPath = meta.path;
@@ -448,7 +448,7 @@ function processMarkdownFile(
     pluginHeadTags: headTags
   };
 
-  const beforeRenderResult = pluginManager.applyBeforeRender({
+  const beforeRenderResult = await pluginManager.applyBeforeRender({
     templateData,
     page: pageInfo
   });
@@ -456,7 +456,7 @@ function processMarkdownFile(
 
   let html = templateEngine.render('layout.html', templateData);
 
-  const afterRenderResult = pluginManager.applyAfterRender({
+  const afterRenderResult = await pluginManager.applyAfterRender({
     html,
     page: pageInfo
   });
@@ -471,7 +471,7 @@ function processMarkdownFile(
   };
 }
 
-function processMarkdownFileLocale(
+async function processMarkdownFileLocale(
   filePath: string,
   relativePath: string,
   cwd: string,
@@ -521,7 +521,7 @@ function processMarkdownFileLocale(
     html: htmlContent,
     meta
   };
-  const parsedResult = pluginManager.applyMarkdownParsed(parsedData);
+  const parsedResult = await pluginManager.applyMarkdownParsed(parsedData);
   htmlContent = parsedResult.html;
 
   const currentPath = meta.path;
@@ -561,7 +561,7 @@ function processMarkdownFileLocale(
     pluginHeadTags: headTags
   };
 
-  const beforeRenderResult = pluginManager.applyBeforeRender({
+  const beforeRenderResult = await pluginManager.applyBeforeRender({
     templateData,
     page: pageInfo
   });
@@ -569,7 +569,7 @@ function processMarkdownFileLocale(
 
   let html = templateEngine.render('layout.html', templateData);
 
-  const afterRenderResult = pluginManager.applyAfterRender({
+  const afterRenderResult = await pluginManager.applyAfterRender({
     html,
     page: pageInfo
   });

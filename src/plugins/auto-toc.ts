@@ -11,6 +11,8 @@ const autoTocPlugin: PluginFactory = (context: PluginContext) => {
   const tocMap = new Map<string, TocItem[]>();
 
   return {
+    dependencies: ['reading-time'],
+
     onMarkdownParsed(data: MarkdownParsedData, ctx: PluginContext) {
       const headings: TocItem[] = [];
       const regex = /<h([23])[^>]*id="([^"]*)"[^>]*>([\s\S]*?)<\/h[23]>/g;
@@ -50,8 +52,11 @@ const autoTocPlugin: PluginFactory = (context: PluginContext) => {
       const headings = tocMap.get(filePath);
       if (!headings || headings.length === 0) return data;
 
+      const readingTime = ctx.store.get(`readingTime:${filePath}`);
+      const readingTimeText = readingTime ? ` · ${readingTime}分钟` : '';
+
       let tocHtml = '<nav class="auto-toc-nav">';
-      tocHtml += '<div class="auto-toc-nav-title">目录</div>';
+      tocHtml += `<div class="auto-toc-nav-title">目录${readingTimeText}</div>`;
       tocHtml += '<ul>';
 
       for (const h of headings) {

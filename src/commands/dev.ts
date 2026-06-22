@@ -170,8 +170,8 @@ export async function dev(cwd: string, options: DevOptions = {}): Promise<void> 
 
   const config = loadConfig(cwd);
   const pluginManager = new PluginManager(cwd, config);
-  pluginManager.loadPlugins().then(() => {
-    pluginManager.applyDevServerStart(server);
+  pluginManager.loadPlugins().then(async () => {
+    await pluginManager.applyDevServerStart(server);
   });
 
   process.on('SIGINT', async () => {
